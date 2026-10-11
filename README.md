@@ -194,3 +194,25 @@ Unresolved requests with the same rental and title are blocked.
 Submission and the full owner-to-tenant status workflow were verified
 manually on the deployed application. Broader automated and permission
 testing remains pending.
+
+## Reviews and notifications API
+
+Public:
+- GET /api/properties/{propertyId}/reviews
+
+Authenticated tenant:
+- GET /api/reviews/properties/{propertyId}/mine
+- PUT /api/reviews/properties/{propertyId}
+  Body: {"rating":4,"comment":"Your rental experience"}
+
+Authenticated account:
+- GET /api/notifications
+- PATCH /api/notifications/{id}/read
+- PATCH /api/notifications/read-all
+
+Reviews require a qualifying rental record and are limited to one per tenant/property. Notification queries and read updates are restricted to the current account.
+
+Database setup:
+Run smartrent/database/reviews-notifications.sql after creating the existing users and properties tables, and before starting the updated backend. Hibernate validates the schema; it does not create these tables. This script contains table definitions only, without credentials or user data.
+
+Notification creation participates in the rental or maintenance transaction. Failed business actions do not commit notifications.
