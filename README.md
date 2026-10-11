@@ -152,10 +152,45 @@ Vercel proxies frontend /api requests to this backend.
 
 ## Known scope limits
 
-This version treats each listing as a single rentable unit. It does not manage multiple room inventories, visits, payments, maintenance, reviews, maps, or advanced admin management.
+This version treats each listing as a single rentable unit. It does not manage multiple room inventories, visits, payments, reviews, maps, password change/reset, notifications, or advanced admin management.
 
 ## Frontend
 
 Application: https://smart-rent-frontend.vercel.app/
 
 Repository: https://github.com/madhurimajindamwar-a11y/SmartRent_Frontend
+
+
+## Profile endpoints
+
+- GET /api/me/profile
+- PUT /api/me/profile
+
+Profile editing requires the signed-in user's current password.
+Only name and email are editable; account ID and role are not editable.
+
+## Maintenance setup and endpoints
+
+The maintenance feature adds the maintenance_requests table.
+
+After importing the base schema, apply:
+
+    smartrent/database/maintenance.sql
+
+Apply it manually to each database before running the updated backend.
+The application still uses ddl-auto=validate.
+
+Endpoints:
+
+- GET /api/maintenance
+- POST /api/maintenance
+- PATCH /api/maintenance/{id}/status
+
+Tenants may submit issues only for their own active rental.
+Owners may update issues only for properties they own.
+Status transitions are OPEN → IN_PROGRESS → RESOLVED.
+Unresolved requests with the same rental and title are blocked.
+
+Submission and the full owner-to-tenant status workflow were verified
+manually on the deployed application. Broader automated and permission
+testing remains pending.
