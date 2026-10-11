@@ -10,8 +10,10 @@ import com.smartrent.repository.PropertyRepository;
 import com.smartrent.repository.RentalRepository;
 import com.smartrent.repository.RentalRequestRepository;
 import com.smartrent.repository.UserRepository;
+
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -32,6 +34,7 @@ public class RentalRequestService {
     private final UserRepository userRepository;
     private final CurrentUserService currentUserService;
     private final EntityManager entityManager;
+    private final NotificationService notificationService;
 
     public RentalRequestService(
             RentalRequestRepository requestRepository,
@@ -39,7 +42,8 @@ public class RentalRequestService {
             PropertyRepository propertyRepository,
             UserRepository userRepository,
             CurrentUserService currentUserService,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            NotificationService notificationService) {
 
         this.requestRepository = requestRepository;
         this.rentalRepository = rentalRepository;
@@ -47,9 +51,10 @@ public class RentalRequestService {
         this.userRepository = userRepository;
         this.currentUserService = currentUserService;
         this.entityManager = entityManager;
+        this.notificationService = notificationService;
     }
 
-    // TENANT: submit a request for a verified, available property.
+    // Tenant submits a request for a verified, available property.
     public RentalRequest createRequest(CreateRentalRequest input) {
         User tenant = requireTenant();
 
@@ -61,16 +66,19 @@ public class RentalRequestService {
         if (!property.isAvailable()
                 || rentalRepository.existsByPropertyIdAndStatus(
                         property.getId(), "ACTIVE")) {
+
             throw conflict("Property is not available");
         }
 
         if (rentalRepository.existsByTenantIdAndStatus(
                 tenant.getId(), "ACTIVE")) {
+
             throw conflict("You already have an active rental");
         }
 
         if (requestRepository.existsByTenantIdAndPropertyIdAndStatus(
                 tenant.getId(), property.getId(), "PENDING")) {
+
             throw conflict(
                     "You already have a pending request for this property"
             );
@@ -82,7 +90,17 @@ public class RentalRequestService {
         request.setMessage(input.message());
         request.setStatus("PENDING");
 
-        return requestRepository.save(request);
+        RentalRequest saved = requestRepository.save(request);
+
+        notificationService.publish(
+                property.getOwnerId(),
+                "New rental request",
+                tenant.getName() + " requested \""
+                        + property.getTitle() + "\".",
+                "/dashboard"
+        );
+
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -101,7 +119,7 @@ public class RentalRequestService {
         return requestRepository.findRequestsForOwner(owner.getId());
     }
 
-    // OWNER/ADMIN: accept or reject a pending request.
+    // Owner or admin accepts or rejects a pending request.
     public RentalRequest decideRequest(
             Long requestId,
             RentalDecisionRequest input) {
@@ -110,6 +128,7 @@ public class RentalRequestService {
 
         if (!"ACCEPTED".equals(input.status())
                 && !"REJECTED".equals(input.status())) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Status must be ACCEPTED or REJECTED"
@@ -131,13 +150,23 @@ public class RentalRequestService {
 
         requirePending(request);
 
-        // Rejection remains possible even if approval was withdrawn.
+        // Rejection is allowed even if property approval was withdrawn.
         if ("REJECTED".equals(input.status())) {
             request.setStatus("REJECTED");
-            return requestRepository.save(request);
+
+            RentalRequest saved = requestRepository.save(request);
+
+            notificationService.publish(
+                    tenant.getId(),
+                    "Rental request rejected",
+                    "Your request for \"" + property.getTitle()
+                            + "\" was rejected.",
+                    "/dashboard"
+            );
+
+            return saved;
         }
 
-        // Acceptance requires current property approval.
         requireVerified(property);
 
         if (!tenant.isEnabled()) {
@@ -147,11 +176,13 @@ public class RentalRequestService {
         if (!property.isAvailable()
                 || rentalRepository.existsByPropertyIdAndStatus(
                         property.getId(), "ACTIVE")) {
+
             throw conflict("Property is no longer available");
         }
 
         if (rentalRepository.existsByTenantIdAndStatus(
                 tenant.getId(), "ACTIVE")) {
+
             throw conflict("This tenant already has an active rental");
         }
 
@@ -180,14 +211,31 @@ public class RentalRequestService {
 
         for (RentalRequest competing : competingRequests) {
             competing.setStatus("REJECTED");
+
+            notificationService.publish(
+                    competing.getTenantId(),
+                    "Room is no longer available",
+                    "Your request for \"" + property.getTitle()
+                            + "\" was rejected because another rental "
+                            + "was confirmed.",
+                    "/dashboard"
+            );
         }
 
         requestRepository.saveAll(competingRequests);
 
+        notificationService.publish(
+                tenant.getId(),
+                "Rental request accepted",
+                "Your request for \"" + property.getTitle()
+                        + "\" was accepted. Your rental is now active.",
+                "/dashboard"
+        );
+
         return request;
     }
 
-    // TENANT: cancel their own pending request.
+    // Tenant cancels their own pending request.
     public RentalRequest cancelRequest(Long requestId) {
         User tenant = requireTenant();
         RentalRequest request = findRequest(requestId);
@@ -200,7 +248,7 @@ public class RentalRequestService {
         }
 
         lockTenant(tenant.getId());
-        lockProperty(request.getPropertyId());
+        Property property = lockProperty(request.getPropertyId());
 
         entityManager.refresh(
                 request,
@@ -210,7 +258,18 @@ public class RentalRequestService {
         requirePending(request);
 
         request.setStatus("CANCELLED");
-        return requestRepository.save(request);
+
+        RentalRequest saved = requestRepository.save(request);
+
+        notificationService.publish(
+                property.getOwnerId(),
+                "Rental request cancelled",
+                tenant.getName() + " cancelled their request for \""
+                        + property.getTitle() + "\".",
+                "/dashboard"
+        );
+
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -270,6 +329,7 @@ public class RentalRequestService {
         if (property.getOwnerId() == null
                 || !"VERIFIED".equals(
                         property.getVerificationStatus())) {
+
             throw conflict(
                     "Only verified properties can receive "
                             + "or accept rental requests"

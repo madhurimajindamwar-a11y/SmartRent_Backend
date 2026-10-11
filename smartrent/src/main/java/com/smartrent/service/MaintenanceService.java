@@ -10,8 +10,10 @@ import com.smartrent.entity.User;
 import com.smartrent.repository.MaintenanceRepository;
 import com.smartrent.repository.PropertyRepository;
 import com.smartrent.repository.RentalRepository;
+
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -28,19 +30,22 @@ public class MaintenanceService {
     private final PropertyRepository propertyRepository;
     private final CurrentUserService currentUserService;
     private final EntityManager entityManager;
+    private final NotificationService notificationService;
 
     public MaintenanceService(
             MaintenanceRepository maintenanceRepository,
             RentalRepository rentalRepository,
             PropertyRepository propertyRepository,
             CurrentUserService currentUserService,
-            EntityManager entityManager) {
+            EntityManager entityManager,
+            NotificationService notificationService) {
 
         this.maintenanceRepository = maintenanceRepository;
         this.rentalRepository = rentalRepository;
         this.propertyRepository = propertyRepository;
         this.currentUserService = currentUserService;
         this.entityManager = entityManager;
+        this.notificationService = notificationService;
     }
 
     @Transactional(readOnly = true)
@@ -120,6 +125,13 @@ public class MaintenanceService {
             );
         }
 
+        Property property = propertyRepository
+                .findById(rental.getPropertyId())
+                .orElseThrow(() -> error(
+                        HttpStatus.NOT_FOUND,
+                        "Property not found"
+                ));
+
         MaintenanceRequest request = new MaintenanceRequest();
         request.setRentalId(rental.getId());
         request.setTitle(title);
@@ -128,6 +140,14 @@ public class MaintenanceService {
 
         MaintenanceRequest saved =
                 maintenanceRepository.saveAndFlush(request);
+
+        notificationService.publish(
+                property.getOwnerId(),
+                "New maintenance request",
+                user.getName() + " reported \"" + saved.getTitle()
+                        + "\" at \"" + property.getTitle() + "\".",
+                "/maintenance"
+        );
 
         return response(saved);
     }
@@ -153,18 +173,19 @@ public class MaintenanceService {
                                 "Request not found"
                         ));
 
-        Rental rental = rentalRepository.findById(request.getRentalId())
+        Rental rental = rentalRepository
+                .findById(request.getRentalId())
                 .orElseThrow(() -> error(
                         HttpStatus.NOT_FOUND,
                         "Rental not found"
                 ));
 
-        Property property =
-                propertyRepository.findById(rental.getPropertyId())
-                        .orElseThrow(() -> error(
-                                HttpStatus.NOT_FOUND,
-                                "Property not found"
-                        ));
+        Property property = propertyRepository
+                .findById(rental.getPropertyId())
+                .orElseThrow(() -> error(
+                        HttpStatus.NOT_FOUND,
+                        "Property not found"
+                ));
 
         if (!owner.getId().equals(property.getOwnerId())) {
             throw error(
@@ -175,6 +196,7 @@ public class MaintenanceService {
 
         String next = input.status();
 
+        // Repeating the same status does not create another notification.
         if (next.equals(request.getStatus())) {
             return response(request);
         }
@@ -197,22 +219,36 @@ public class MaintenanceService {
         MaintenanceRequest saved =
                 maintenanceRepository.saveAndFlush(request);
 
+        notificationService.publish(
+                rental.getTenantId(),
+                "RESOLVED".equals(next)
+                        ? "Maintenance issue resolved"
+                        : "Maintenance work started",
+                "\"" + saved.getTitle() + "\" at \""
+                        + property.getTitle() + "\" is now "
+                        + ("RESOLVED".equals(next)
+                                ? "resolved."
+                                : "in progress."),
+                "/maintenance"
+        );
+
         return response(saved);
     }
 
     private MaintenanceResponse response(MaintenanceRequest request) {
-        Rental rental = rentalRepository.findById(request.getRentalId())
+        Rental rental = rentalRepository
+                .findById(request.getRentalId())
                 .orElseThrow(() -> error(
                         HttpStatus.NOT_FOUND,
                         "Rental not found"
                 ));
 
-        Property property =
-                propertyRepository.findById(rental.getPropertyId())
-                        .orElseThrow(() -> error(
-                                HttpStatus.NOT_FOUND,
-                                "Property not found"
-                        ));
+        Property property = propertyRepository
+                .findById(rental.getPropertyId())
+                .orElseThrow(() -> error(
+                        HttpStatus.NOT_FOUND,
+                        "Property not found"
+                ));
 
         return new MaintenanceResponse(
                 request.getId(),
@@ -231,6 +267,7 @@ public class MaintenanceService {
     private ResponseStatusException error(
             HttpStatus status,
             String message) {
+
         return new ResponseStatusException(status, message);
     }
 }
